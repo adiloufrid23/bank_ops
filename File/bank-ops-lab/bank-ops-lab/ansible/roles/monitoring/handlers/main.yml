@@ -1,0 +1,5 @@
+---
+- name: restart oneagent
+  ansible.builtin.service:
+    name: oneagent
+    state: restarted

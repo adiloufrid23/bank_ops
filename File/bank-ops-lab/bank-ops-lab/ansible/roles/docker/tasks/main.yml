@@ -1,0 +1,110 @@
+###############################################################################
+# roles/docker/tasks/main.yml — Installation Docker + Kubernetes
+###############################################################################
+---
+- name: Installer les prérequis Docker
+  ansible.builtin.package:
+    name:
+      - yum-utils
+      - device-mapper-persistent-data
+      - lvm2
+    state: present
+
+- name: Ajouter le repo Docker CE
+  ansible.builtin.yum_repository:
+    name: docker-ce
+    description: Docker CE Stable
+    baseurl: https://download.docker.com/linux/centos/$releasever/$basearch/stable
+    gpgcheck: true
+    gpgkey: https://download.docker.com/linux/centos/gpg
+    enabled: true
+
+- name: Installer Docker CE
+  ansible.builtin.package:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+    state: present
+
+- name: Configurer Docker daemon
+  ansible.builtin.copy:
+    content: |
+      {
+        "exec-opts": ["native.cgroupdriver=systemd"],
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "100m",
+          "max-file": "3"
+        },
+        "storage-driver": "overlay2",
+        "insecure-registries": ["registry.internal:5000"]
+      }
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+  notify: restart docker
+
+- name: Démarrer Docker
+  ansible.builtin.service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Ajouter bankops au groupe docker
+  ansible.builtin.user:
+    name: bankops
+    groups: docker
+    append: true
+
+# ─── Kubernetes ──────────────────────────────────────────────────────────
+- name: Ajouter le repo Kubernetes
+  ansible.builtin.yum_repository:
+    name: kubernetes
+    description: Kubernetes
+    baseurl: https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
+    gpgcheck: true
+    gpgkey: https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+    enabled: true
+
+- name: Installer kubelet, kubeadm, kubectl
+  ansible.builtin.package:
+    name:
+      - kubelet
+      - kubeadm
+      - kubectl
+    state: present
+
+- name: Activer kubelet
+  ansible.builtin.service:
+    name: kubelet
+    enabled: true
+    state: started
+
+- name: Désactiver le swap (requis par K8s)
+  ansible.builtin.command:
+    cmd: swapoff -a
+  changed_when: true
+
+- name: Supprimer le swap du fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '.*swap.*'
+    state: absent
+
+- name: Initialiser le cluster K8s (master uniquement)
+  ansible.builtin.command:
+    cmd: >
+      kubeadm init
+      --pod-network-cidr=10.244.0.0/16
+      --service-cidr=10.96.0.0/12
+      --apiserver-advertise-address={{ ansible_host }}
+    creates: /etc/kubernetes/admin.conf
+  when: "'k8s_masters' in group_names"
+
+- name: Configurer kubectl pour bankops
+  ansible.builtin.shell: |
+    mkdir -p /home/bankops/.kube
+    cp /etc/kubernetes/admin.conf /home/bankops/.kube/config
+    chown bankops:bankops /home/bankops/.kube/config
+  when: "'k8s_masters' in group_names"
+  changed_when: true

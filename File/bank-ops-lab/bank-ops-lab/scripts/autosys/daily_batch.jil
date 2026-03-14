@@ -1,0 +1,147 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   daily_batch.jil — Ordonnancement du batch quotidien bancaire
+   Plateforme : Autosys / CA Workload Automation
+   
+   Chaîne de jobs :
+   
+   BANK_DAILY_START
+       ├── BANK_RECEIVE_FILES      (réception CFT)
+       ├── BANK_VALIDATE_FILES     (validation format)
+       │       └── BANK_PROCESS_TX (traitement transactions)
+       │               ├── BANK_RECONCILIATION (réconciliation)
+       │               └── BANK_GENERATE_REPORTS (rapports)
+       │                       └── BANK_SEND_FILES (envoi CFT)
+       └── BANK_DAILY_END          (notification fin)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Box principale : conteneur du batch quotidien ─────────────────────── */
+insert_job: BANK_DAILY_BOX
+job_type: BOX
+owner: bankops@srvprod01
+permission: gx,ge,wx,we
+date_conditions: 1
+days_of_week: mo,tu,we,th,fr
+start_times: "02:00"
+description: "Batch quotidien - Traitement des transactions bancaires"
+alarm_if_fail: 1
+alarm_if_terminated: 1
+
+/* ─── Job 1 : Déclencheur ───────────────────────────────────────────────── */
+insert_job: BANK_DAILY_START
+job_type: CMD
+box_name: BANK_DAILY_BOX
+command: /opt/bank-ops/scripts/shell/health_check.sh --json
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Vérification de la santé des services avant le batch"
+std_out_file: /var/log/bank-ops/autosys/daily_start.out
+std_err_file: /var/log/bank-ops/autosys/daily_start.err
+max_run_alarm: 5
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile
+
+/* ─── Job 2 : Réception des fichiers via CFT ────────────────────────────── */
+insert_job: BANK_RECEIVE_FILES
+job_type: CMD
+box_name: BANK_DAILY_BOX
+condition: success(BANK_DAILY_START)
+command: /opt/bank-ops/scripts/cft/monitor_transfers.sh --direction IN --wait 1800
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Attente et réception des fichiers partenaires via CFT"
+std_out_file: /var/log/bank-ops/autosys/receive_files.out
+std_err_file: /var/log/bank-ops/autosys/receive_files.err
+max_run_alarm: 45
+alarm_if_fail: 1
+n_retrys: 2
+profile: /opt/bank-ops/.profile
+
+/* ─── Job 3 : Validation des fichiers reçus ─────────────────────────────── */
+insert_job: BANK_VALIDATE_FILES
+job_type: CMD
+box_name: BANK_DAILY_BOX
+condition: success(BANK_RECEIVE_FILES)
+command: /opt/bank-ops/scripts/shell/batch_processing.sh --date $(date +\%Y-\%m-\%d) --dry-run
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Validation des fichiers (dry-run) avant traitement"
+std_out_file: /var/log/bank-ops/autosys/validate_files.out
+std_err_file: /var/log/bank-ops/autosys/validate_files.err
+max_run_alarm: 10
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile
+
+/* ─── Job 4 : Traitement des transactions ───────────────────────────────── */
+insert_job: BANK_PROCESS_TX
+job_type: CMD
+box_name: BANK_DAILY_BOX
+condition: success(BANK_VALIDATE_FILES)
+command: /opt/bank-ops/scripts/shell/batch_processing.sh --date $(date +\%Y-\%m-\%d)
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Traitement complet des transactions bancaires"
+std_out_file: /var/log/bank-ops/autosys/process_tx.out
+std_err_file: /var/log/bank-ops/autosys/process_tx.err
+max_run_alarm: 60
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile
+
+/* ─── Job 5 : Réconciliation ────────────────────────────────────────────── */
+insert_job: BANK_RECONCILIATION
+job_type: CMD
+box_name: BANK_DAILY_BOX
+condition: success(BANK_PROCESS_TX)
+command: /opt/bank-ops/scripts/shell/reconciliation.sh --date $(date +\%Y-\%m-\%d)
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Réconciliation et vérification des soldes"
+std_out_file: /var/log/bank-ops/autosys/reconciliation.out
+std_err_file: /var/log/bank-ops/autosys/reconciliation.err
+max_run_alarm: 30
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile
+
+/* ─── Job 6 : Génération des rapports ───────────────────────────────────── */
+insert_job: BANK_GENERATE_REPORTS
+job_type: CMD
+box_name: BANK_DAILY_BOX
+condition: success(BANK_RECONCILIATION)
+command: /opt/bank-ops/scripts/shell/generate_reports.sh --date $(date +\%Y-\%m-\%d) --format PDF
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Génération des rapports quotidiens (PDF)"
+std_out_file: /var/log/bank-ops/autosys/reports.out
+std_err_file: /var/log/bank-ops/autosys/reports.err
+max_run_alarm: 15
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile
+
+/* ─── Job 7 : Envoi des fichiers vers partenaires ──────────────────────── */
+insert_job: BANK_SEND_FILES
+job_type: CMD
+box_name: BANK_DAILY_BOX
+condition: success(BANK_GENERATE_REPORTS)
+command: /opt/bank-ops/scripts/cft/monitor_transfers.sh --direction OUT
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Envoi des fichiers traités vers les partenaires via CFT"
+std_out_file: /var/log/bank-ops/autosys/send_files.out
+std_err_file: /var/log/bank-ops/autosys/send_files.err
+max_run_alarm: 30
+alarm_if_fail: 1
+n_retrys: 3
+profile: /opt/bank-ops/.profile
+
+/* ─── Job 8 : Notification fin de batch ─────────────────────────────────── */
+insert_job: BANK_DAILY_END
+job_type: CMD
+box_name: BANK_DAILY_BOX
+condition: success(BANK_SEND_FILES)
+command: /opt/bank-ops/scripts/shell/notify.sh --channel ops --status SUCCESS
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Notification de fin de batch (Slack + email)"
+std_out_file: /var/log/bank-ops/autosys/daily_end.out
+std_err_file: /var/log/bank-ops/autosys/daily_end.err
+max_run_alarm: 5
+profile: /opt/bank-ops/.profile

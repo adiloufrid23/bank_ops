@@ -1,0 +1,60 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   file_transfer.jil — Orchestration des transferts CFT via Autosys
+   Déclenché à la demande ou par dépendance depuis daily_batch
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+insert_job: BANK_CFT_OUTBOUND_BOX
+job_type: BOX
+owner: bankops@srvprod01
+permission: gx,ge,wx,we
+description: "Envoi de fichiers vers tous les partenaires CFT"
+alarm_if_fail: 1
+
+insert_job: BANK_CFT_SEND_STET_SCT
+job_type: CMD
+box_name: BANK_CFT_OUTBOUND_BOX
+command: /opt/bank-ops/scripts/cft/send_file.sh --partner STET --flow SCT
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Envoi virements SEPA SCT vers STET"
+max_run_alarm: 15
+alarm_if_fail: 1
+n_retrys: 3
+profile: /opt/bank-ops/.profile
+
+insert_job: BANK_CFT_SEND_STET_SDD
+job_type: CMD
+box_name: BANK_CFT_OUTBOUND_BOX
+command: /opt/bank-ops/scripts/cft/send_file.sh --partner STET --flow SDD
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Envoi prélèvements SEPA SDD vers STET"
+max_run_alarm: 15
+alarm_if_fail: 1
+n_retrys: 3
+profile: /opt/bank-ops/.profile
+
+insert_job: BANK_CFT_SEND_SWIFT_MT103
+job_type: CMD
+box_name: BANK_CFT_OUTBOUND_BOX
+condition: success(BANK_CFT_SEND_STET_SCT) AND success(BANK_CFT_SEND_STET_SDD)
+command: /opt/bank-ops/scripts/cft/send_file.sh --partner SWIFT --flow MT103
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Envoi virements internationaux MT103 vers SWIFT"
+max_run_alarm: 20
+alarm_if_fail: 1
+n_retrys: 3
+profile: /opt/bank-ops/.profile
+
+insert_job: BANK_CFT_VERIFY_ALL
+job_type: CMD
+box_name: BANK_CFT_OUTBOUND_BOX
+condition: done(BANK_CFT_SEND_SWIFT_MT103)
+command: /opt/bank-ops/scripts/cft/monitor_transfers.sh --direction OUT
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Vérification de tous les transferts sortants"
+max_run_alarm: 10
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile

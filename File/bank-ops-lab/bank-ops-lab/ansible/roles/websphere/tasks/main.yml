@@ -1,0 +1,80 @@
+###############################################################################
+# roles/websphere/tasks/main.yml — Installation et configuration WebSphere
+###############################################################################
+---
+- name: Installer Java 17 (OpenJ9)
+  ansible.builtin.package:
+    name:
+      - java-17-openjdk
+      - java-17-openjdk-devel
+    state: present
+
+- name: Créer le répertoire WebSphere
+  ansible.builtin.file:
+    path: /opt/ibm/wlp
+    state: directory
+    owner: bankops
+    group: bankops
+    mode: "0755"
+
+- name: Télécharger WebSphere Liberty
+  ansible.builtin.get_url:
+    url: "https://public.dhe.ibm.com/ibmdl/export/pub/software/websphere/wasdev/downloads/wlp/24.0.0.3/wlp-kernel-24.0.0.3.zip"
+    dest: /tmp/wlp.zip
+    mode: "0644"
+  register: download_result
+
+- name: Extraire WebSphere Liberty
+  ansible.builtin.unarchive:
+    src: /tmp/wlp.zip
+    dest: /opt/ibm/
+    remote_src: true
+    owner: bankops
+    group: bankops
+  when: download_result.changed
+
+- name: Installer les features Liberty
+  ansible.builtin.command:
+    cmd: /opt/ibm/wlp/bin/featureUtility installFeature javaee-10.0 microProfile-6.0 monitor-1.0
+  become_user: bankops
+  changed_when: true
+
+- name: Copier la configuration server.xml
+  ansible.builtin.template:
+    src: server.xml.j2
+    dest: /opt/ibm/wlp/usr/servers/defaultServer/server.xml
+    owner: bankops
+    group: bankops
+    mode: "0644"
+  notify: restart websphere
+
+- name: Créer le service systemd
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=WebSphere Liberty Profile
+      After=network.target postgresql.service
+
+      [Service]
+      Type=simple
+      User=bankops
+      Group=bankops
+      ExecStart=/opt/ibm/wlp/bin/server run defaultServer
+      ExecStop=/opt/ibm/wlp/bin/server stop defaultServer
+      Restart=on-failure
+      RestartSec=10
+      LimitNOFILE=65536
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/wlp.service
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart websphere
+
+- name: Activer le service WebSphere
+  ansible.builtin.service:
+    name: wlp
+    enabled: true
+    state: started

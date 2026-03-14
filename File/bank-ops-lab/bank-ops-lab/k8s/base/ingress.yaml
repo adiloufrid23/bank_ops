@@ -1,0 +1,41 @@
+###############################################################################
+# ingress.yaml — Point d'entrée unique pour Bank-Ops-Lab
+###############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bankops-ingress
+  namespace: bankops
+  labels:
+    app.kubernetes.io/part-of: bank-ops-lab
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "50"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - bankops.internal.example.com
+      secretName: bankops-tls
+  rules:
+    - host: bankops.internal.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: bankops-api-svc
+                port:
+                  number: 8080
+          - path: /app
+            pathType: Prefix
+            backend:
+              service:
+                name: bankops-websphere-svc
+                port:
+                  number: 9080

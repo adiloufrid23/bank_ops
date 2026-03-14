@@ -1,0 +1,19 @@
+###############################################################################
+# service-api.yaml
+###############################################################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: bankops-api-svc
+  namespace: bankops
+  labels:
+    app: bankops-api
+spec:
+  type: ClusterIP
+  selector:
+    app: bankops-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

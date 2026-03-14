@@ -1,0 +1,61 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   monthly_close.jil — Clôture comptable mensuelle
+   Exécution : Dernier jour ouvré du mois à 22:00
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+insert_job: BANK_MONTHLY_CLOSE_BOX
+job_type: BOX
+owner: bankops@srvprod01
+permission: gx,ge
+date_conditions: 1
+run_calendar: LAST_BUSINESS_DAY
+start_times: "22:00"
+description: "Clôture comptable mensuelle"
+alarm_if_fail: 1
+
+insert_job: BANK_FREEZE_ACCOUNTS
+job_type: CMD
+box_name: BANK_MONTHLY_CLOSE_BOX
+command: /opt/bank-ops/scripts/shell/freeze_accounts.sh --mode readonly
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Gel temporaire des comptes pour clôture"
+max_run_alarm: 5
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile
+
+insert_job: BANK_COMPUTE_INTERESTS
+job_type: CMD
+box_name: BANK_MONTHLY_CLOSE_BOX
+condition: success(BANK_FREEZE_ACCOUNTS)
+command: /opt/bank-ops/scripts/shell/compute_interests.sh --period monthly
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Calcul des intérêts mensuels"
+max_run_alarm: 120
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile
+
+insert_job: BANK_REGULATORY_REPORT
+job_type: CMD
+box_name: BANK_MONTHLY_CLOSE_BOX
+condition: success(BANK_COMPUTE_INTERESTS)
+command: /opt/bank-ops/scripts/shell/regulatory_report.sh --type COREP --format XML
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Génération rapports réglementaires COREP/FINREP"
+max_run_alarm: 60
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile
+
+insert_job: BANK_UNFREEZE_ACCOUNTS
+job_type: CMD
+box_name: BANK_MONTHLY_CLOSE_BOX
+condition: success(BANK_REGULATORY_REPORT)
+command: /opt/bank-ops/scripts/shell/freeze_accounts.sh --mode readwrite
+machine: srvprod01
+owner: bankops@srvprod01
+description: "Dégel des comptes après clôture"
+max_run_alarm: 5
+alarm_if_fail: 1
+profile: /opt/bank-ops/.profile

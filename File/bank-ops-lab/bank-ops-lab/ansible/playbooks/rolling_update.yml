@@ -1,0 +1,74 @@
+###############################################################################
+# rolling_update.yml — Mise à jour Kubernetes sans coupure
+# Usage : ansible-playbook playbooks/rolling_update.yml -e "image_tag=2.0.0"
+###############################################################################
+---
+- name: "Rolling update Kubernetes — Bank-Ops"
+  hosts: k8s_masters
+  become: true
+  vars:
+    image_tag: "{{ image_tag | default('latest') }}"
+    namespace: bankops
+    registry: registry.internal/bankops
+
+  tasks:
+    - name: Vérifier l'état du cluster
+      ansible.builtin.command:
+        cmd: kubectl get nodes --no-headers
+      register: nodes_status
+      changed_when: false
+
+    - name: Afficher l'état du cluster
+      ansible.builtin.debug:
+        msg: "{{ nodes_status.stdout_lines | length }} nœuds dans le cluster"
+
+    - name: Mettre à jour l'image de l'API
+      ansible.builtin.command:
+        cmd: >
+          kubectl set image deployment/bankops-api
+          api={{ registry }}/api:{{ image_tag }}
+          -n {{ namespace }}
+          --record
+      register: api_update
+
+    - name: Attendre le rollout de l'API
+      ansible.builtin.command:
+        cmd: >
+          kubectl rollout status deployment/bankops-api
+          -n {{ namespace }}
+          --timeout=300s
+      register: api_rollout
+
+    - name: Vérifier la santé de l'API
+      ansible.builtin.command:
+        cmd: >
+          kubectl get pods -n {{ namespace }}
+          -l app=bankops-api
+          -o jsonpath='{.items[*].status.phase}'
+      register: api_pod_status
+      failed_when: "'Pending' in api_pod_status.stdout or 'Failed' in api_pod_status.stdout"
+
+    - name: Mettre à jour l'image WebSphere
+      ansible.builtin.command:
+        cmd: >
+          kubectl set image deployment/bankops-websphere
+          websphere={{ registry }}/websphere:{{ image_tag }}
+          -n {{ namespace }}
+          --record
+      register: ws_update
+
+    - name: Attendre le rollout WebSphere
+      ansible.builtin.command:
+        cmd: >
+          kubectl rollout status deployment/bankops-websphere
+          -n {{ namespace }}
+          --timeout=600s
+      register: ws_rollout
+
+    - name: Résumé du déploiement
+      ansible.builtin.debug:
+        msg: |
+          Rolling update terminé :
+          - API     : {{ api_rollout.stdout }}
+          - WAS     : {{ ws_rollout.stdout }}
+          - Version : {{ image_tag }}

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bankops
+  labels:
+    app.kubernetes.io/part-of: bank-ops-lab
+    environment: production

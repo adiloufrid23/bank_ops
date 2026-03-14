@@ -1,0 +1,109 @@
+###############################################################################
+# deploy_app.yml — Déploiement applicatif sur WebSphere + K8s
+# Usage : ansible-playbook playbooks/deploy_app.yml -e "version=1.2.3"
+###############################################################################
+---
+- name: "Déploiement applicatif Bank-Ops"
+  hosts: appservers
+  become: true
+  serial: 1
+  vars:
+    app_version: "{{ version | default('latest') }}"
+    app_name: bankops
+    deploy_dir: /opt/bank-ops/deploy
+    backup_dir: /opt/bank-ops/deploy/backups
+
+  pre_tasks:
+    - name: Vérifier la version à déployer
+      ansible.builtin.debug:
+        msg: "Déploiement de {{ app_name }} v{{ app_version }} sur {{ inventory_hostname }}"
+
+    - name: Créer le répertoire de backup
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: bankops
+        mode: "0755"
+
+    - name: Sauvegarder la version actuelle
+      ansible.builtin.copy:
+        src: /opt/ibm/wlp/usr/servers/defaultServer/apps/bankops.war
+        dest: "{{ backup_dir }}/bankops_{{ ansible_date_time.iso8601_basic_short }}.war"
+        remote_src: true
+      ignore_errors: true
+
+  tasks:
+    - name: Retirer le serveur du load balancer
+      ansible.builtin.uri:
+        url: "http://{{ hostvars['srvprod-web01'].ansible_host }}/api/pool/remove"
+        method: POST
+        body_format: json
+        body:
+          server: "{{ inventory_hostname }}"
+        status_code: 200
+      ignore_errors: true
+
+    - name: Attendre la fin des connexions actives (drain)
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: Arrêter WebSphere Liberty
+      ansible.builtin.service:
+        name: wlp
+        state: stopped
+      register: stop_result
+
+    - name: Déployer la nouvelle version
+      ansible.builtin.copy:
+        src: "artifacts/bankops-{{ app_version }}.war"
+        dest: /opt/ibm/wlp/usr/servers/defaultServer/apps/bankops.war
+        owner: bankops
+        group: bankops
+        mode: "0644"
+
+    - name: Démarrer WebSphere Liberty
+      ansible.builtin.service:
+        name: wlp
+        state: started
+
+    - name: Attendre que le service soit prêt
+      ansible.builtin.uri:
+        url: "http://localhost:9080/health"
+        method: GET
+        status_code: 200
+      register: health_result
+      retries: 30
+      delay: 5
+      until: health_result.status == 200
+
+    - name: Réintégrer dans le load balancer
+      ansible.builtin.uri:
+        url: "http://{{ hostvars['srvprod-web01'].ansible_host }}/api/pool/add"
+        method: POST
+        body_format: json
+        body:
+          server: "{{ inventory_hostname }}"
+        status_code: 200
+      ignore_errors: true
+
+    - name: Vérification post-déploiement
+      ansible.builtin.uri:
+        url: "http://localhost:9080/api/v1/status"
+        method: GET
+        return_content: true
+      register: status_check
+
+    - name: Afficher le statut
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Déploiement v{{ app_version }} réussi — {{ status_check.json.status | default('OK') }}"
+
+  post_tasks:
+    - name: Notifier le succès
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}"
+        method: POST
+        body_format: json
+        body:
+          text: "✅ Bank-Ops v{{ app_version }} déployé sur {{ inventory_hostname }}"
+      ignore_errors: true
+      run_once: true

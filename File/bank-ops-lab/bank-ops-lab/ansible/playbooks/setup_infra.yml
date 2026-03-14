@@ -1,0 +1,140 @@
+###############################################################################
+# setup_infra.yml — Provisioning complet de l'infrastructure Bank-Ops
+# Usage : ansible-playbook -i inventory/staging.ini playbooks/setup_infra.yml
+###############################################################################
+---
+- name: "Phase 1 — Configuration de base (tous les serveurs)"
+  hosts: all
+  become: true
+  tags: [base]
+
+  tasks:
+    - name: Mettre à jour les paquets système
+      ansible.builtin.yum:
+        name: "*"
+        state: latest
+        security: true
+      when: ansible_os_family == "RedHat"
+
+    - name: Installer les paquets essentiels
+      ansible.builtin.package:
+        name:
+          - vim
+          - curl
+          - wget
+          - htop
+          - net-tools
+          - jq
+          - tree
+          - unzip
+          - chrony
+          - rsync
+        state: present
+
+    - name: Configurer le fuseau horaire
+      ansible.builtin.timezone:
+        name: Europe/Paris
+
+    - name: Configurer NTP (chrony)
+      ansible.builtin.template:
+        src: templates/chrony.conf.j2
+        dest: /etc/chrony.conf
+        mode: "0644"
+      notify: restart chrony
+
+    - name: Configurer les limites système
+      ansible.builtin.copy:
+        content: |
+          bankops soft nofile 65536
+          bankops hard nofile 65536
+          bankops soft nproc 32768
+          bankops hard nproc 32768
+        dest: /etc/security/limits.d/bankops.conf
+        mode: "0644"
+
+    - name: Créer l'utilisateur bankops
+      ansible.builtin.user:
+        name: bankops
+        group: bankops
+        shell: /bin/bash
+        home: /home/bankops
+        create_home: true
+        state: present
+
+    - name: Créer les répertoires applicatifs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: bankops
+        group: bankops
+        mode: "0755"
+      loop:
+        - /opt/bank-ops
+        - /opt/bank-ops/scripts
+        - /opt/bank-ops/data/incoming
+        - /opt/bank-ops/data/outgoing
+        - /opt/bank-ops/data/processed
+        - /opt/bank-ops/data/archive
+        - /opt/bank-ops/reports
+        - /var/log/bank-ops
+
+    - name: Configurer le firewall (ports communs)
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop:
+        - 22/tcp
+        - 9080/tcp
+        - 8080/tcp
+      when: ansible_os_family == "RedHat"
+
+  handlers:
+    - name: restart chrony
+      ansible.builtin.service:
+        name: chronyd
+        state: restarted
+
+- name: "Phase 2 — WebSphere Liberty (serveurs applicatifs)"
+  hosts: appservers
+  become: true
+  tags: [websphere]
+  roles:
+    - websphere
+
+- name: "Phase 3 — Docker & Kubernetes (cluster K8s)"
+  hosts: k8s_masters:k8s_workers
+  become: true
+  tags: [docker, k8s]
+  roles:
+    - docker
+
+- name: "Phase 4 — Monitoring Dynatrace (tous)"
+  hosts: all
+  become: true
+  tags: [monitoring]
+  roles:
+    - monitoring
+
+- name: "Phase 5 — Validation finale"
+  hosts: all
+  become: true
+  tags: [validate]
+
+  tasks:
+    - name: Vérifier la connectivité réseau
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        timeout: 10
+      loop: "{{ groups['all'] }}"
+      when: item != inventory_hostname
+
+    - name: Afficher le résumé
+      ansible.builtin.debug:
+        msg: >
+          Serveur {{ inventory_hostname }} configuré.
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          RAM: {{ ansible_memtotal_mb }}MB
+          CPU: {{ ansible_processor_vcpus }} vCPUs

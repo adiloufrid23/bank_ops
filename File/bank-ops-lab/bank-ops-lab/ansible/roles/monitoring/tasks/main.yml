@@ -1,0 +1,73 @@
+###############################################################################
+# roles/monitoring/tasks/main.yml — Installation Dynatrace OneAgent
+###############################################################################
+---
+- name: Vérifier si Dynatrace OneAgent est déjà installé
+  ansible.builtin.stat:
+    path: /opt/dynatrace/oneagent/agent/lib64/liboneagentproc.so
+  register: dt_installed
+
+- name: Télécharger l'installeur Dynatrace OneAgent
+  ansible.builtin.get_url:
+    url: "{{ dynatrace_api_url }}/api/v1/deployment/installer/agent/unix/default/latest?arch=x86&flavor=default"
+    dest: /tmp/dynatrace-oneagent.sh
+    headers:
+      Authorization: "Api-Token {{ dynatrace_paas_token }}"
+    mode: "0755"
+  when: not dt_installed.stat.exists
+
+- name: Installer Dynatrace OneAgent
+  ansible.builtin.command:
+    cmd: >
+      /tmp/dynatrace-oneagent.sh
+      --set-app-log-content-access=true
+      --set-infra-only=false
+      --set-host-group={{ env }}-{{ group_names | first }}
+      --set-host-tag=app:bankops
+      --set-host-tag=env:{{ env }}
+    creates: /opt/dynatrace/oneagent/agent/lib64/liboneagentproc.so
+  when: not dt_installed.stat.exists
+
+- name: Vérifier que le service Dynatrace tourne
+  ansible.builtin.service:
+    name: oneagent
+    state: started
+    enabled: true
+
+- name: Configurer les métriques personnalisées
+  ansible.builtin.copy:
+    content: |
+      # Métriques custom Bank-Ops
+      [bankops.batch]
+      group = Bank-Ops Batch
+      event.type = LOG
+      source = /var/log/bank-ops/batch_*.log
+      log.source.searchPattern = *batch*.log
+
+      [bankops.cft]
+      group = Bank-Ops CFT
+      event.type = LOG
+      source = /var/log/bank-ops/cft/*.log
+      log.source.searchPattern = *cft*.log
+    dest: /var/lib/dynatrace/oneagent/agent/config/custom_metrics.conf
+    mode: "0644"
+  notify: restart oneagent
+
+- name: Configurer l'ingestion de logs
+  ansible.builtin.copy:
+    content: |
+      # Log ingestion — Bank-Ops
+      - path: /var/log/bank-ops/**/*.log
+        log.source.rule: bank-ops
+        custom.attributes:
+          application: bankops
+          environment: {{ env }}
+    dest: /var/lib/dynatrace/oneagent/agent/config/log_monitoring.yaml
+    mode: "0644"
+  notify: restart oneagent
+
+handlers:
+  - name: restart oneagent
+    ansible.builtin.service:
+      name: oneagent
+      state: restarted

@@ -1,0 +1,67 @@
+###############################################################################
+# dynatrace-operator.yaml — Déploiement Dynatrace sur Kubernetes
+###############################################################################
+
+# Namespace dédié au monitoring
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dynatrace
+  labels:
+    purpose: monitoring
+---
+# Secret pour les tokens Dynatrace
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dynatrace-tokens
+  namespace: dynatrace
+type: Opaque
+data:
+  # Remplacer par les tokens encodés en base64
+  # echo -n 'dt0c01.XXXXXXXX' | base64
+  apiToken: REPLACE_WITH_BASE64_API_TOKEN
+  paasToken: REPLACE_WITH_BASE64_PAAS_TOKEN
+---
+# DynakubeOperator — Installation via Helm en production
+# Ici : manifeste simplifié pour démonstration
+apiVersion: dynatrace.com/v1beta2
+kind: DynaKube
+metadata:
+  name: bankops-dynakube
+  namespace: dynatrace
+  annotations:
+    feature.dynatrace.com/automatic-injection: "true"
+spec:
+  apiUrl: https://ENVIRONMENT_ID.live.dynatrace.com/api
+
+  tokens: dynatrace-tokens
+
+  # OneAgent — injection automatique dans les pods
+  oneAgent:
+    cloudNativeFullStack:
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 300m
+          memory: 512Mi
+
+  # ActiveGate — proxy et routing
+  activeGate:
+    capabilities:
+      - routing
+      - kubernetes-monitoring
+      - dynatrace-api
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    replicas: 1

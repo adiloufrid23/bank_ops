@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     server.xml — Configuration WebSphere Liberty Profile
+     Application bancaire — Bank-Ops-Lab
+     ═══════════════════════════════════════════════════════════════════════ -->
+<server description="Bank-Ops Application Server">
+
+    <!-- Features -->
+    <featureManager>
+        <feature>javaee-10.0</feature>
+        <feature>microProfile-6.0</feature>
+        <feature>monitor-1.0</feature>
+        <feature>transportSecurity-1.0</feature>
+        <feature>appSecurity-5.0</feature>
+        <feature>jdbc-4.3</feature>
+        <feature>jndi-1.0</feature>
+    </featureManager>
+
+    <!-- Ports HTTP -->
+    <httpEndpoint id="defaultHttpEndpoint"
+                  host="*"
+                  httpPort="9080"
+                  httpsPort="9443">
+        <accessLogging filepath="${server.output.dir}/logs/access.log"
+                       logFormat="%h %u %t &quot;%r&quot; %s %b %D"/>
+    </httpEndpoint>
+
+    <!-- SSL/TLS -->
+    <ssl id="defaultSSLConfig"
+         keyStoreRef="defaultKeyStore"
+         sslProtocol="TLSv1.3"/>
+    <keyStore id="defaultKeyStore"
+              location="${server.config.dir}/resources/security/key.p12"
+              password="${env.KEYSTORE_PASSWORD}"
+              type="PKCS12"/>
+
+    <!-- DataSource PostgreSQL -->
+    <library id="postgresLib">
+        <fileset dir="${shared.resource.dir}" includes="postgresql.jar"/>
+    </library>
+
+    <dataSource id="bankopsDS"
+                jndiName="jdbc/bankops"
+                type="javax.sql.ConnectionPoolDataSource">
+        <jdbcDriver libraryRef="postgresLib"/>
+        <properties.postgresql
+            serverName="${env.DB_HOST}"
+            portNumber="${env.DB_PORT}"
+            databaseName="${env.DB_NAME}"
+            user="${env.DB_USER}"
+            password="${env.DB_PASSWORD}"/>
+        <connectionManager
+            maxPoolSize="50"
+            minPoolSize="10"
+            connectionTimeout="30s"
+            maxIdleTime="10m"
+            reapTime="3m"/>
+    </dataSource>
+
+    <!-- Application -->
+    <webApplication id="bankops"
+                    location="bankops.war"
+                    contextRoot="/api">
+        <classloader delegation="parentLast"/>
+    </webApplication>
+
+    <!-- Health Check (MicroProfile) -->
+    <mpHealth/>
+
+    <!-- Métriques (MicroProfile) -->
+    <mpMetrics authentication="false"/>
+
+    <!-- Logging -->
+    <logging
+        traceSpecification="*=info:com.bankops.*=fine"
+        maxFileSize="50"
+        maxFiles="10"
+        consoleLogLevel="INFO"
+        consoleFormat="json"/>
+
+    <!-- JVM options -->
+    <jvmEntries genericJvmArguments="${env.JVM_ARGS}"/>
+
+</server>

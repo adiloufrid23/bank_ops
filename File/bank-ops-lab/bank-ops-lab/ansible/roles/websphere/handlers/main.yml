@@ -1,0 +1,9 @@
+---
+- name: restart websphere
+  ansible.builtin.service:
+    name: wlp
+    state: restarted
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true

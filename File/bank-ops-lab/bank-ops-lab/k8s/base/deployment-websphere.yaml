@@ -1,0 +1,102 @@
+###############################################################################
+# deployment-websphere.yaml — Déploiement WebSphere Liberty
+###############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bankops-websphere
+  namespace: bankops
+  labels:
+    app: bankops-websphere
+    tier: application
+    app.kubernetes.io/part-of: bank-ops-lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bankops-websphere
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: bankops-websphere
+        tier: application
+    spec:
+      terminationGracePeriodSeconds: 90
+      serviceAccountName: bankops-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+
+      containers:
+        - name: websphere
+          image: registry.internal/bankops/websphere:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 9080
+            - name: https
+              containerPort: 9443
+
+          envFrom:
+            - configMapRef:
+                name: bankops-config
+
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bankops-secrets
+                  key: db-password
+
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+
+          volumeMounts:
+            - name: server-logs
+              mountPath: /opt/ibm/wlp/output/defaultServer/logs
+
+      volumes:
+        - name: server-logs
+          emptyDir:
+            sizeLimit: 1Gi

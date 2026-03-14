@@ -1,0 +1,162 @@
+###############################################################################
+# docker-compose.yml — Stack complète Bank-Ops-Lab
+# Usage : docker-compose up -d
+###############################################################################
+
+services:
+
+  # ─── Reverse Proxy (Nginx) ─────────────────────────────────────────────
+  nginx:
+    build: ./nginx
+    container_name: bankops-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      websphere:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - bankops-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ─── WebSphere Liberty (Application Java EE) ──────────────────────────
+  websphere:
+    build: ./websphere
+    container_name: bankops-websphere
+    ports:
+      - "9080:9080"
+      - "9443:9443"
+    environment:
+      - JVM_ARGS=-Xmx512m -Xms256m
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=bankops
+      - DB_USER=bankops_admin
+      - DB_PASSWORD_FILE=/run/secrets/db_password
+    volumes:
+      - websphere-logs:/opt/ibm/wlp/output/defaultServer/logs
+      - ./websphere/server.xml:/opt/ibm/wlp/usr/servers/defaultServer/server.xml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bankops-net
+    restart: unless-stopped
+    secrets:
+      - db_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "1.0"
+
+  # ─── API REST (Spring Boot) ────────────────────────────────────────────
+  api:
+    build: ./api
+    container_name: bankops-api
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/bankops
+      - SPRING_DATASOURCE_USERNAME=bankops_admin
+      - SPRING_DATASOURCE_PASSWORD_FILE=/run/secrets/db_password
+      - JAVA_OPTS=-Xmx256m -Xms128m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bankops-net
+    restart: unless-stopped
+    secrets:
+      - db_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ─── Base de données PostgreSQL ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: bankops-db
+    environment:
+      - POSTGRES_DB=bankops
+      - POSTGRES_USER=bankops_admin
+      - POSTGRES_PASSWORD_FILE=/run/secrets/db_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - bankops-net
+    restart: unless-stopped
+    secrets:
+      - db_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bankops_admin -d bankops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ─── Dynatrace OneAgent (Monitoring) ───────────────────────────────────
+  dynatrace-oneagent:
+    image: dynatrace/oneagent:latest
+    container_name: bankops-dynatrace
+    environment:
+      - ONEAGENT_INSTALLER_SCRIPT_URL=${DT_API_URL:-https://dynatrace.example.com}/api/v1/deployment/installer/agent/unix/default/latest
+      - ONEAGENT_INSTALLER_DOWNLOAD_TOKEN=${DT_PAAS_TOKEN:-placeholder}
+    volumes:
+      - /:/mnt/root:ro
+      - dynatrace-data:/opt/dynatrace/oneagent
+    networks:
+      - bankops-net
+    restart: unless-stopped
+    privileged: true
+    pid: host
+
+# ─── Volumes persistants ────────────────────────────────────────────────
+volumes:
+  postgres-data:
+    driver: local
+  websphere-logs:
+    driver: local
+  dynatrace-data:
+    driver: local
+
+# ─── Réseau isolé ───────────────────────────────────────────────────────
+networks:
+  bankops-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# ─── Secrets ─────────────────────────────────────────────────────────────
+secrets:
+  db_password:
+    file: ./.secrets/db_password.txt

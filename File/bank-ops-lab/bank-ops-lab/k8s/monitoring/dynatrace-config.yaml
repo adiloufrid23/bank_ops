@@ -1,0 +1,156 @@
+###############################################################################
+# dynatrace-config.yaml — Alerting profiles et dashboards Dynatrace
+# Note : En production, utiliser l'API Dynatrace ou Monaco (Monitoring as Code)
+###############################################################################
+
+# Ce fichier documente la configuration Dynatrace à appliquer via l'API
+# ou l'outil Monaco (https://github.com/Dynatrace/dynatrace-configuration-as-code)
+
+---
+# Profil d'alerte — Transactions bancaires
+apiVersion: dynatrace.com/v1
+kind: AlertingProfile
+metadata:
+  name: bankops-critical
+spec:
+  displayName: "Bank-Ops Critical Alerts"
+  rules:
+    # Erreur applicative > 1%
+    - severityLevel: ERRORS
+      tagFilter:
+        includeMode: INCLUDE_ANY
+        tagFilters:
+          - context: CONTEXTLESS
+            key: app
+            value: bankops
+      delayInMinutes: 0
+
+    # Temps de réponse > 3s
+    - severityLevel: PERFORMANCE
+      tagFilter:
+        includeMode: INCLUDE_ANY
+        tagFilters:
+          - context: CONTEXTLESS
+            key: app
+            value: bankops
+      delayInMinutes: 5
+
+    # Service indisponible
+    - severityLevel: AVAILABILITY
+      tagFilter:
+        includeMode: INCLUDE_ANY
+        tagFilters:
+          - context: CONTEXTLESS
+            key: app
+            value: bankops
+      delayInMinutes: 0
+
+---
+# Notification — Webhook Slack
+apiVersion: dynatrace.com/v1
+kind: NotificationConfig
+metadata:
+  name: bankops-slack-notification
+spec:
+  type: SLACK
+  displayName: "Bank-Ops Slack Alerts"
+  alertingProfile: bankops-critical
+  slackNotification:
+    url: "${SLACK_WEBHOOK_URL}"
+    channel: "#ops-alerts"
+    title: "🏦 Bank-Ops Alert: {ProblemTitle}"
+
+---
+# Métriques personnalisées — SLIs bancaires
+apiVersion: dynatrace.com/v1
+kind: CalculatedServiceMetric
+metadata:
+  name: bankops-transaction-duration
+spec:
+  name: "calc:service.bankops.transaction_duration"
+  displayName: "Durée transaction bancaire"
+  unit: MILLI_SECOND
+  entityType: SERVICE
+  metricDefinition:
+    metric: RESPONSE_TIME
+  conditions:
+    - attribute: SERVICE_TAG
+      comparisonInfo:
+        type: TAG
+        comparison: EQUALS
+        value:
+          context: CONTEXTLESS
+          key: transaction-type
+          value: banking
+
+---
+# SLO — Objectifs de niveau de service
+apiVersion: dynatrace.com/v1
+kind: ServiceLevelObjective
+metadata:
+  name: bankops-availability-slo
+spec:
+  name: "Bank-Ops Disponibilité"
+  description: "SLO de disponibilité pour les services bancaires"
+  target: 99.9
+  warning: 99.95
+  evaluationType: AGGREGATE
+  timeframe: "-1M"
+  filter: "type(SERVICE),tag([CONTEXTLESS]app:bankops)"
+  metricExpression: "(100)*(builtin:service.errors.server.successCount:splitBy())/(builtin:service.requestCount.server:splitBy())"
+
+---
+# Dashboard — Vue d'ensemble opérationnelle
+# À importer via l'API Dynatrace POST /api/config/v1/dashboards
+dashboard:
+  name: "Bank-Ops — Vue Opérationnelle"
+  tiles:
+    - name: "Taux de succès des transactions"
+      tileType: SLO
+      bounds: { top: 0, left: 0, width: 304, height: 304 }
+      slo: bankops-availability-slo
+
+    - name: "Temps de réponse P95"
+      tileType: DATA_EXPLORER
+      bounds: { top: 0, left: 304, width: 608, height: 304 }
+      queries:
+        - metric: "builtin:service.response.time"
+          splitBy: ["dt.entity.service"]
+          filterBy:
+            - type: TAG
+              value: "app:bankops"
+
+    - name: "Pods Kubernetes"
+      tileType: DATA_EXPLORER
+      bounds: { top: 304, left: 0, width: 456, height: 304 }
+      queries:
+        - metric: "builtin:cloud.kubernetes.pods"
+          splitBy: ["dt.entity.cloud_application"]
+          filterBy:
+            - type: ENTITY_ATTRIBUTE
+              value: "namespace:bankops"
+
+    - name: "Utilisation CPU"
+      tileType: DATA_EXPLORER
+      bounds: { top: 304, left: 456, width: 456, height: 304 }
+      queries:
+        - metric: "builtin:containers.cpu.usagePercent"
+          splitBy: ["dt.entity.container_group"]
+
+    - name: "Transferts CFT"
+      tileType: CUSTOM_CHARTING
+      bounds: { top: 608, left: 0, width: 456, height: 304 }
+      queries:
+        - metric: "calc:service.bankops.cft_transfers"
+          splitBy: ["direction"]
+
+    - name: "Batch Autosys — Statut"
+      tileType: MARKDOWN
+      bounds: { top: 608, left: 456, width: 456, height: 304 }
+      markdown: |
+        ## Statut des batchs
+
+        | Job | Dernier run | Statut |
+        |-----|-------------|--------|
+        | BANK_DAILY_BOX | {last_run} | {status} |
+        | BANK_MONTHLY_CLOSE | {last_run} | {status} |

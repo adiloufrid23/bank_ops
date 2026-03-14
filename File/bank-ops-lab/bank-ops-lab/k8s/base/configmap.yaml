@@ -1,0 +1,27 @@
+###############################################################################
+# configmap.yaml — Configuration partagée Bank-Ops-Lab
+###############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bankops-config
+  namespace: bankops
+  labels:
+    app.kubernetes.io/part-of: bank-ops-lab
+data:
+  # Base de données
+  DB_HOST: "postgres-svc"
+  DB_PORT: "5432"
+  DB_NAME: "bankops"
+
+  # Application
+  SPRING_PROFILES_ACTIVE: "kubernetes"
+  LOG_LEVEL: "INFO"
+  TZ: "Europe/Paris"
+
+  # WebSphere
+  JVM_ARGS: "-Xmx512m -Xms256m -XX:+UseG1GC"
+
+  # Monitoring
+  DYNATRACE_ENABLED: "true"
+  METRICS_EXPORT_ENABLED: "true"
